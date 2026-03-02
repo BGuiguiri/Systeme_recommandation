@@ -17,7 +17,7 @@ from utils import load_ratings, get_dataset_stats
 def main():
     parser = argparse.ArgumentParser(description="Entraîne et sauvegarde le modèle ALS")
     parser.add_argument("--path", default="ml-1m", help="Chemin du dataset MovieLens 1M")
-    parser.add_argument("--factors", type=int, default=20, help="Nombre de facteurs latents")
+    parser.add_argument("--factors", type=int, default=50, help="Nombre de facteurs latents")
     parser.add_argument("--iters", type=int, default=15, help="Nombre d'itérations ALS")
     parser.add_argument("--reg", type=float, default=0.1, help="Coefficient de régularisation")
     parser.add_argument("--output", default="als_model.pkl", help="Fichier de sauvegarde")
