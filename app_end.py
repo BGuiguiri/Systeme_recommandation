@@ -560,22 +560,67 @@ tab_reco, tab_search, tab_profile = st.tabs(
 # ── Helper : récupérer les recommandations de l'utilisateur connecté ──
 def get_recommendations(k=12):
     """
-    Génère les recommandations pour l'utilisateur connecté.
-    Si l'utilisateur a des notations locales non présentes dans le modèle,
-    on utilise l'ID utilisateur le plus proche dans le modèle.
+    Génère les recommandations personnalisées pour l'utilisateur connecté.
+
+    Logique :
+      1. L'utilisateur n'a aucune note → films les plus populaires du modèle.
+      2. L'utilisateur a au moins 2 notes → on calcule son vecteur de goûts
+         à la volée (une étape ALS) sans ré-entraîner le modèle, puis on
+         prédit ses notes sur tous les films et on retourne le top-k.
+      3. L'utilisateur a un username numérique ET existe dans le modèle →
+         on utilise directement son vecteur appris (utilisateurs MovieLens).
     """
-    username = st.session_state.username
     user_ratings = st.session_state.user_ratings
 
-    # Chercher si l'username correspond à un user_id numérique
+    # ── Cas 1 : utilisateur MovieLens connu dans le modèle ────────────────
     try:
-        uid = int(username)
+        uid = int(st.session_state.username)
+        if uid in model.user_id_map:
+            return model.recommend_top_k(uid, k=k)
     except ValueError:
-        # Mapper sur l'ID 1 par défaut pour les nouveaux utilisateurs
-        uid = 1
+        pass
 
-    recs = model.recommend_top_k(uid, k=k)
-    return recs
+    # ── Cas 2 : aucune note → films populaires ───────────────────────────
+    if not user_ratings:
+        return model._get_popular_items(k)
+
+    # ── Cas 3 : nouvel utilisateur avec des notes ────────────────────────
+    # On garde uniquement les films que le modèle connaît
+    known = [
+        (int(mid), float(r))
+        for mid, r in user_ratings.items()
+        if int(mid) in model.item_id_map
+    ]
+
+    # Moins de 2 notes connues → pas assez pour calculer un profil fiable
+    if len(known) < 2:
+        return model._get_popular_items(k)
+
+    # Indices internes des films notés
+    item_indices = np.array([model.item_id_map[mid] for mid, _ in known])
+    ratings_arr  = np.array([r for _, r in known], dtype=np.float64)
+
+    # Calcul du vecteur utilisateur par une étape ALS :
+    # On résout (X^T X + λI) · u = X^T · y
+    # où X = facteurs des films notés, y = notes centrées
+    X = model.item_factors[item_indices]
+    y = ratings_arr - model.global_mean - model.item_biases[item_indices]
+    A = X.T @ X + model.reg_param * np.eye(model.n_factors)
+    user_vector = np.linalg.solve(A, X.T @ y)
+
+    # Prédiction sur tous les films (vectorisée)
+    preds = np.clip(
+        model.global_mean + model.item_biases + model.item_factors @ user_vector,
+        1.0, 5.0
+    )
+
+    # Exclure les films déjà notés par l'utilisateur
+    for mid, _ in known:
+        preds[model.item_id_map[mid]] = -np.inf
+
+    # Retourner le top-k
+    top_indices = np.argsort(preds)[::-1][:k]
+    return [(model.inverse_item_map[int(i)], float(preds[i])) for i in top_indices]
 
 
 # ── TAB 1 : Recommandations ────────────────────
